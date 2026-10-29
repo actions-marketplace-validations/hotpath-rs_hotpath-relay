@@ -1,0 +1,74 @@
+name: Hotpath Relay
+description: >-
+  Upload Rust performance reports to hotpath-cloud.
+author: hotpath-rs
+branding:
+  icon: upload-cloud
+  color: orange
+
+# Runs in a job of a workflow triggered by `on: workflow_run` for the
+# benchmark workflow. The job must grant `actions: read`, `id-token: write`
+# and `pull-requests: read`; a composite action cannot grant them itself.
+inputs:
+  benchmark:
+    description: Benchmark series to upload to, 1-64 chars from [A-Za-z0-9._-].
+    required: true
+  artifact_name:
+    description: Name of the artifact the benchmark job uploaded.
+    required: false
+    default: hotpath-report
+  report_file:
+    description: Path of the JSON report inside that artifact.
+    required: false
+    default: report.json
+  source_root:
+    description: >-
+      Build workspace root relative to the repository root, "" when they are
+      the same. Prefixes relative paths in source links.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Find the pull request
+      id: pr
+      shell: bash
+      env:
+        # Inputs reach the scripts through the environment, never
+        # interpolated into the script text. Event fields are read from
+        # $GITHUB_EVENT_PATH by the script.
+        BENCHMARK: ${{ inputs.benchmark }}
+        ARTIFACT_NAME: ${{ inputs.artifact_name }}
+        REPORT_FILE: ${{ inputs.report_file }}
+        SOURCE_ROOT: ${{ inputs.source_root }}
+        GH_TOKEN: ${{ github.token }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/find-pr.sh"
+
+    # If this cannot find the artifact, the usual cause is a renamed benchmark
+    # workflow or a mismatched artifact_name.
+    - name: Download the report
+      if: steps.pr.outputs.number
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: ${{ steps.pr.outputs.dir }}/artifact
+        run-id: ${{ github.event.workflow_run.id }}
+        github-token: ${{ github.token }}
+
+    - name: Prepare the report
+      if: steps.pr.outputs.number
+      shell: bash
+      env:
+        WORK_DIR: ${{ steps.pr.outputs.dir }}
+        REPORT_FILE: ${{ inputs.report_file }}
+        SOURCE_ROOT: ${{ inputs.source_root }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/prepare.sh"
+
+    - name: Upload the report
+      if: steps.pr.outputs.number
+      shell: bash
+      env:
+        WORK_DIR: ${{ steps.pr.outputs.dir }}
+        BENCHMARK: ${{ inputs.benchmark }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/upload.sh"
